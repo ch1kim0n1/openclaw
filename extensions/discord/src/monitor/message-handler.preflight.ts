@@ -256,6 +256,53 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+  // DIAG-FORWARD: temporary diagnostic for forwarded-message resolution. REMOVE before landing.
+  try {
+    const diagRaw =
+      (
+        message as {
+          rawData?: { message_snapshots?: unknown; message_reference?: unknown };
+        }
+      ).rawData ?? {};
+    const diagSnaps = Array.isArray((diagRaw as { message_snapshots?: unknown }).message_snapshots)
+      ? ((diagRaw as { message_snapshots?: unknown[] }).message_snapshots as Array<{
+          message?: {
+            content?: unknown;
+            embeds?: unknown;
+            attachments?: unknown;
+            author?: { username?: string; global_name?: string };
+          };
+        }>)
+      : [];
+    console.log(
+      JSON.stringify({
+        diag: "FORWARD",
+        messageId: message.id,
+        isDM: isDirectMessage,
+        contentLen: (message.content ?? "").length,
+        hasMessageRef: Boolean((diagRaw as { message_reference?: unknown }).message_reference),
+        messageRefType: (diagRaw as { message_reference?: { type?: unknown } }).message_reference
+          ?.type,
+        hasReferencedMessage: Boolean(
+          (message as { referencedMessage?: unknown }).referencedMessage,
+        ),
+        snapshotCount: diagSnaps.length,
+        snapshotPreviews: diagSnaps.slice(0, 2).map((s) => ({
+          hasMessage: Boolean(s?.message),
+          contentLen: typeof s?.message?.content === "string" ? s.message.content.length : 0,
+          embedsCount: Array.isArray(s?.message?.embeds) ? s.message.embeds.length : 0,
+          attachmentsCount: Array.isArray(s?.message?.attachments)
+            ? s.message.attachments.length
+            : 0,
+          authorName: s?.message?.author?.global_name ?? s?.message?.author?.username,
+        })),
+        resolvedMessageTextLen: messageText.length,
+        resolvedHeadPreview: messageText.slice(0, 160),
+      }),
+    );
+  } catch (err) {
+    console.log(JSON.stringify({ diag: "FORWARD", error: String(err) }));
+  }
   const injectedBoundThreadBinding =
     !isDirectMessage && !isGroupDm
       ? resolveInjectedBoundThreadLookupRecord({

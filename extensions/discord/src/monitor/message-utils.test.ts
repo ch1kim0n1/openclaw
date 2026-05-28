@@ -1020,6 +1020,40 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("");
   });
 
+  it("includes both user-typed text and forwarded snapshot content (cross-DM forward shape)", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "look at this:",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "the original forwarded message",
+                embeds: [],
+                attachments: [],
+                author: {
+                  id: "u9",
+                  username: "Charlie",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+          message_reference: {
+            type: 1,
+            message_id: "m_original",
+            channel_id: "c_other_dm",
+          },
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("look at this:");
+    expect(text).toContain("[Forwarded message from @Charlie]");
+    expect(text).toContain("the original forwarded message");
+  });
+
   it("resolves user mentions in content", () => {
     const text = resolveDiscordMessageText(
       asMessage({
