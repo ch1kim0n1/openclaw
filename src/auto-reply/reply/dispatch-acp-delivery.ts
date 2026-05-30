@@ -29,6 +29,10 @@ const messageActionRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/message-action-runner.js"),
 );
 
+const ACP_VISIBILITY_ISOLATED_CHANNELS = new Set(["telegram"]);
+const ACP_ISOLATED_ERROR_TEXT =
+  "I hit an internal OpenClaw error while working on that. I kept the tool details out of Telegram; check the local logs for the trace.";
+
 function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
 }
@@ -86,6 +90,31 @@ async function shouldTreatDeliveredTextAsVisible(params: {
     });
   }
   return false;
+}
+
+function isAcpVisibilityIsolatedChannel(channel: string | undefined): boolean {
+  const channelId = normalizeOptionalLowercaseString(channel);
+  return Boolean(channelId && ACP_VISIBILITY_ISOLATED_CHANNELS.has(channelId));
+}
+
+function prepareAcpPayloadForChannelVisibility(params: {
+  channel: string | undefined;
+  kind: ReplyDispatchKind;
+  payload: ReplyPayload;
+}): ReplyPayload | null {
+  if (!isAcpVisibilityIsolatedChannel(params.channel)) {
+    return params.payload;
+  }
+  if (params.kind === "tool" || isReplyPayloadStatusNotice(params.payload)) {
+    return null;
+  }
+  if (params.payload.isError === true) {
+    return {
+      text: ACP_ISOLATED_ERROR_TEXT,
+      isError: true,
+    };
+  }
+  return params.payload;
 }
 
 async function maybeApplyAcpTts(params: {
@@ -327,7 +356,19 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    let visiblePayload = payload;
+    const targetChannel =
+      params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo
+        ? params.originatingChannel
+        : directChannel;
+    const channelVisiblePayload = prepareAcpPayloadForChannelVisibility({
+      channel: targetChannel,
+      kind,
+      payload,
+    });
+    if (!channelVisiblePayload) {
+      return false;
+    }
+    let visiblePayload = channelVisiblePayload;
     const rawBlockText = kind === "block" ? normalizeOptionalString(payload.text) : undefined;
     if (rawBlockText) {
       const isStatusNotice = isReplyPayloadStatusNotice(payload);

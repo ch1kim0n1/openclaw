@@ -575,6 +575,8 @@ describe("tryDispatchAcpReply", () => {
       cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
       shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
     });
 
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
@@ -598,6 +600,8 @@ describe("tryDispatchAcpReply", () => {
       cfg: createAcpConfigWithVisibleToolTags(),
       dispatcher,
       shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
     });
 
     expect(messageActionMocks.runMessageAction).toHaveBeenCalledTimes(1);
@@ -1825,6 +1829,91 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.queuedFinal).toBe(true);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("CODEX_OK");
+  });
+
+  it("does not deliver ACP tool traces to Telegram even when tool tags are visible", async () => {
+    setReadyAcpResolution();
+    mockToolLifecycleTurn("call-telegram-tool");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpConfigWithVisibleToolTags(),
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not route ACP tool traces back to Telegram before the final answer", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call",
+          toolCallId: "call-routed-telegram-tool",
+          status: "in_progress",
+          title: "Run command",
+          text: "Run command (in_progress)",
+        });
+        await onEvent({
+          type: "tool_call",
+          tag: "tool_call_update",
+          toolCallId: "call-routed-telegram-tool",
+          status: "completed",
+          title: "Run command",
+          text: "Run command (completed)",
+        });
+        await onEvent({ type: "text_delta", text: "Done cleanly.", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpConfigWithVisibleToolTags(),
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:thread-1",
+    });
+
+    expect(result?.counts.tool).toBe(0);
+    expect(result?.counts.final).toBe(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routePayload().text).toBe("Done cleanly.");
+  });
+
+  it("redacts ACP runtime error details before delivering to Telegram", async () => {
+    setReadyAcpResolution();
+    policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(
+      new AcpRuntimeError(
+        "ACP_DISPATCH_DISABLED",
+        "sqlite3 /Users/vlad-openclaw/OpenClaw/openclaw-vlad-ops/data/openclaw.sqlite3 .dump",
+      ),
+    );
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+    });
+
+    const payload = dispatcherCall(dispatcher.sendFinalReply);
+    expect(payload.isError).toBe(true);
+    expect(payload.text).toContain("internal OpenClaw error");
+    expect(payload.text).not.toContain("sqlite3");
+    expect(payload.text).not.toContain("openclaw.sqlite3");
   });
 
   it("delivers default ACP text as final for channels without a visibility override", async () => {
